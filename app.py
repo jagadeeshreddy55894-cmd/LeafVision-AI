@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
-from tensorflow.keras.models import load_model
+
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -84,9 +84,13 @@ h1, h2, h3, p, label,
 def get_model():
     if not MODEL_PATH.is_file():
         raise FileNotFoundError("Model file not found.")
-    return load_model(MODEL_PATH, compile=False)
 
+    import tensorflow as tf
 
+    return tf.keras.models.load_model(
+        MODEL_PATH,
+        compile=False
+    )
 @st.cache_data
 def get_metadata():
     if not METADATA_PATH.is_file():

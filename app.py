@@ -32,7 +32,16 @@ st.markdown("""
 h1, h2, h3, p, label,
 [data-testid="stMetricLabel"],
 [data-testid="stMetricValue"],
-[data-testid="stMetricDelta"] {
+[data-testid="stMetricDelta"],
+[data-testid="stAlert"] p {
+    color: #1f2937 !important;
+}
+
+[data-testid="stAlert"] {
+    color: #1f2937 !important;
+}
+
+[data-testid="stMarkdownContainer"] p {
     color: #1f2937 !important;
 }
 

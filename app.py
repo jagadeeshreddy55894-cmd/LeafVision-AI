@@ -4,9 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import streamlit as st
+import matplotlib.pyplot as plt
 from PIL import Image, UnidentifiedImageError
-
-
 
 PROJECT_DIR = Path(__file__).resolve().parent
 MODEL_PATH = PROJECT_DIR / "LeafVision_ResNet50.keras"
@@ -91,6 +90,8 @@ def get_model():
         MODEL_PATH,
         compile=False
     )
+
+
 @st.cache_data
 def get_metadata():
     if not METADATA_PATH.is_file():
@@ -119,7 +120,9 @@ def get_named_predictions(model, image_batch):
         output_names = getattr(model, "output_names", [])
 
         if len(output_names) != len(predictions):
-            raise ValueError("Could not match model outputs with their names.")
+            raise ValueError(
+                "Could not match model outputs with their names."
+            )
 
         named_predictions = dict(zip(output_names, predictions))
 
@@ -130,6 +133,74 @@ def get_named_predictions(model, image_batch):
             raise ValueError(f"Missing model output: {name}")
 
     return named_predictions
+
+
+def generate_gradcam(model, image_batch, class_index):
+    import tensorflow as tf
+
+    backbone = model.get_layer("resnet50")
+    preprocessing = model.get_layer("sequential")
+
+    last_conv_layer = backbone.get_layer("conv5_block3_out")
+
+    grad_model = tf.keras.Model(
+        inputs=backbone.input,
+        outputs=[
+            last_conv_layer.output,
+            backbone.output
+        ]
+    )
+
+    with tf.GradientTape() as tape:
+
+        backbone_input = preprocessing(
+            tf.convert_to_tensor(image_batch),
+            training=False
+        )
+
+        conv_outputs, backbone_output = grad_model(
+            backbone_input,
+            training=False
+        )
+
+        pooled = model.get_layer("global_average_pooling2d")(
+            backbone_output
+        )
+
+        dropped = model.get_layer("dropout")(
+            pooled,
+            training=False
+        )
+
+        predictions = model.get_layer("disease_output")(dropped)
+
+        class_score = predictions[:, class_index]
+
+    gradients = tape.gradient(class_score, conv_outputs)
+
+    if gradients is None:
+        raise ValueError(
+            "Grad-CAM gradients are disconnected from the convolution layer."
+        )
+
+    weights = tf.reduce_mean(
+        gradients,
+        axis=(1, 2),
+        keepdims=True
+    )
+
+    heatmap = tf.reduce_sum(
+        weights * conv_outputs,
+        axis=-1
+    )
+
+    heatmap = tf.nn.relu(heatmap[0])
+
+    heatmap = heatmap / (
+        tf.reduce_max(heatmap) + tf.keras.backend.epsilon()
+    )
+
+    return heatmap.numpy()
 
 
 st.title("🌿 LeafVision-AI")
@@ -151,6 +222,7 @@ if uploaded_file is not None:
 
     try:
         image = Image.open(uploaded_file).convert("RGB")
+
         st.image(
             image,
             caption="Uploaded leaf image",
@@ -158,12 +230,16 @@ if uploaded_file is not None:
         )
 
     except (UnidentifiedImageError, OSError, ValueError):
-        st.error("Invalid image. Please upload a valid JPG or PNG.")
+        st.error(
+            "Invalid image. Please upload a valid JPG or PNG."
+        )
         st.stop()
 
     if st.button("🔍 Analyze Leaf"):
 
-        with st.spinner("Loading AI model and analyzing your leaf..."):
+        with st.spinner(
+            "Loading AI model and analyzing your leaf..."
+        ):
 
             try:
                 model = get_model()
@@ -175,11 +251,17 @@ if uploaded_file is not None:
                 )
 
                 image_batch = np.expand_dims(
-                    np.asarray(resized_image, dtype=np.float32),
+                    np.asarray(
+                        resized_image,
+                        dtype=np.float32
+                    ),
                     axis=0
                 )
 
-                outputs = get_named_predictions(model, image_batch)
+                outputs = get_named_predictions(
+                    model,
+                    image_batch
+                )
 
                 disease_scores = np.asarray(
                     outputs["disease_output"]
@@ -202,13 +284,20 @@ if uploaded_file is not None:
                         "Species output does not match metadata."
                     )
 
-                disease_index = int(np.argmax(disease_scores))
-                species_index = int(np.argmax(species_scores))
+                disease_index = int(
+                    np.argmax(disease_scores)
+                )
+
+                species_index = int(
+                    np.argmax(species_scores)
+                )
 
                 disease_name = disease_classes[disease_index]
                 species_name = species_classes[species_index]
 
-                disease_name = disease_name.split("___", 1)[-1]
+                disease_name = disease_name.split(
+                    "___", 1
+                )[-1]
 
                 disease_confidence = float(
                     disease_scores[disease_index]
@@ -218,7 +307,9 @@ if uploaded_file is not None:
                     species_scores[species_index]
                 ) * 100
 
-                healthy = disease_name.lower().strip("_ ") == "healthy"
+                healthy = (
+                    disease_name.lower().strip("_ ") == "healthy"
+                )
 
                 st.divider()
                 st.header("🌱 Prediction Results")
@@ -238,7 +329,47 @@ if uploaded_file is not None:
                 if healthy:
                     st.success("Leaf Status: Healthy 🌿")
                 else:
-                    st.warning("Leaf Status: Disease Detected ⚠️")
+                    st.warning(
+                        "Leaf Status: Disease Detected ⚠️"
+                    )
+
+                st.divider()
+                st.subheader("🔬 Grad-CAM Visualization")
+
+                heatmap = generate_gradcam(
+                    model,
+                    image_batch,
+                    disease_index
+                )
+
+                heatmap_image = Image.fromarray(
+                    np.uint8(heatmap * 255)
+                ).resize(
+                    image.size,
+                    Image.Resampling.BILINEAR
+                )
+
+                fig, ax = plt.subplots(figsize=(8, 6))
+
+                ax.imshow(image)
+                ax.imshow(
+                    heatmap_image,
+                    cmap="jet",
+                    alpha=0.4
+                )
+
+                ax.axis("off")
+
+                st.pyplot(fig)
+                plt.close(fig)
+
+                st.caption(
+    "The Grad-CAM heatmap visualizes image regions that "
+    "influenced the model's predicted disease class. "
+    "For healthy leaves, highlighted regions represent "
+    "features supporting the healthy classification, "
+    "not infected areas."
+)
 
             except Exception as error:
                 st.error(f"Prediction failed: {error}")
